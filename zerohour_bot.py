@@ -29,6 +29,23 @@ from zhsb_feed import dig, get_map_images, get_zhsb
 
 COLOR = 0x2B8CFF
 
+# Which commands reply privately. True = only the person who used the command sees the reply.
+# False = everyone in the channel sees it. Change any of these and restart the bot.
+EPHEMERAL = {
+    "stats": True,
+    "mapstats": True,
+    "rank": False,
+    "leaderboard": False,
+    "top10": False,
+    "training": True,
+    "playercount": False,
+    "showservers": True,
+}
+
+
+def private(interaction: discord.Interaction) -> bool:
+    return EPHEMERAL.get(interaction.command.name, False)
+
 # Your own map pictures: put them in a folder named "maps" next to this file. Name each one by the
 # map's number or its name, e.g. 5.png, bank heist.png, Bank_Heist.jpg (capitals, spaces and
 # symbols don't matter; .png .jpg .jpeg .webp all work).
@@ -85,7 +102,7 @@ def not_found(name: str) -> str:
 @client.tree.command(name="stats", description="Show a player's overall Zero Hour stats")
 @app_commands.describe(player="The player's name")
 async def stats(interaction: discord.Interaction, player: str):
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=private(interaction))
     s = await asyncio.to_thread(player_stats, player)
     if not s:
         await respond(interaction, not_found(player))
@@ -103,7 +120,7 @@ async def stats(interaction: discord.Interaction, player: str):
 @client.tree.command(name="mapstats", description="Show a player's stats by map")
 @app_commands.describe(player="The player's name", map="Optional: a specific map")
 async def mapstats(interaction: discord.Interaction, player: str, map: Optional[str] = None):
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=private(interaction))
     s = await asyncio.to_thread(player_stats, player)
     if not s:
         await respond(interaction, not_found(player))
@@ -139,7 +156,7 @@ async def leaderboard_cmd(
     sort: Optional[app_commands.Choice[str]] = None,
     min_matches: int = 5,
 ):
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=private(interaction))
     key = sort.value if sort else "kd"
     rows = await asyncio.to_thread(leaderboard, key, min_matches, 10)
     if not rows:
@@ -156,7 +173,7 @@ async def leaderboard_cmd(
 @client.tree.command(name="rank", description="Check a player's rank and total matchpoints on the Steam top 200")
 @app_commands.describe(player="Steam name, Steam ID, or Steam profile link")
 async def rank(interaction: discord.Interaction, player: str):
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=private(interaction))
     try:
         entries, fetched_at = await asyncio.to_thread(get_leaderboard)
     except Exception:
@@ -207,7 +224,7 @@ def top_embed(title: str, entries: list, fetched_at: float, unit: str) -> discor
 
 @client.tree.command(name="top10", description="Show the top 10 players by total matchpoints on Steam")
 async def top10(interaction: discord.Interaction):
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=private(interaction))
     try:
         entries, fetched_at = await asyncio.to_thread(get_top, BOARD_ID, 10)
     except Exception:
@@ -218,7 +235,7 @@ async def top10(interaction: discord.Interaction):
 
 @client.tree.command(name="training", description="Show the top 10 on the Steam Training best scores leaderboard")
 async def training(interaction: discord.Interaction):
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=private(interaction))
     board = steam_leaderboard.TRAINING_BOARD_ID
     if board is None:
         await respond(interaction, "The Training leaderboard hasn't been set up yet.")
@@ -233,7 +250,7 @@ async def training(interaction: discord.Interaction):
 
 @client.tree.command(name="playercount", description="Show how many people are playing Zero Hour right now")
 async def playercount(interaction: discord.Interaction):
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=private(interaction))
     steam = site = None
     try:
         steam, _ = await asyncio.to_thread(get_current_players)
@@ -262,7 +279,7 @@ async def playercount(interaction: discord.Interaction):
 
 @client.tree.command(name="showservers", description="Show the public Zero Hour servers listed on zhsb.info")
 async def showservers(interaction: discord.Interaction):
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=private(interaction))
     try:
         data, fetched_at = await get_zhsb()
     except Exception:
