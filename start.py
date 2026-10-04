@@ -18,7 +18,7 @@ def load_env_file(path: str = ".env"):
     """Reads KEY=VALUE lines from a .env file (if there is one) into the environment."""
     if not os.path.exists(path):
         return
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:  # utf-8-sig ignores the invisible marker Notepad can add
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -28,6 +28,9 @@ def load_env_file(path: str = ".env"):
 
 
 load_env_file()
+
+print("[start] .env file:", "found" if os.path.exists(".env") else "NOT found in " + HERE)
+print("[start] STEAM_API_KEY:", "found" if os.environ.get("STEAM_API_KEY", "").strip() else "NOT found")
 
 token = os.environ.get("DISCORD_TOKEN")
 if not token:
