@@ -26,7 +26,7 @@ import steam_leaderboard
 import steam_stats
 from steam_leaderboard import BOARD_ID, get_current_players, get_leaderboard, get_top, search as search_steam
 from steam_stats import SteamStatsError, find_steam_id, get_summary, get_user_stats, leaderboard_entry
-from zerohour_db import leaderboard, player_stats
+from zerohour_db import find_players, leaderboard, player_stats
 from zhsb_feed import dig, get_map_images, get_zhsb
 
 COLOR = 0x2B8CFF
@@ -34,7 +34,7 @@ COLOR = 0x2B8CFF
 # Which commands reply privately. True = only the person who used the command sees the reply.
 # False = everyone in the channel sees it. Change any of these and restart the bot.
 EPHEMERAL = {
-    "stats": True,
+    "stats": False,
     "mapstats": True,
     "rank": False,
     "leaderboard": False,
@@ -122,24 +122,30 @@ def not_found(name: str) -> str:
 
 
 def steam_stats_embed(st: dict, summary: dict, fallback_name: str) -> discord.Embed:
+    def num(v, suffix=""):
+        """A number for display, or 'not available' when Steam didn't give us a trustworthy value."""
+        return "not available" if v is None else (f"{v:,}{suffix}" if isinstance(v, int) else f"{v}{suffix}")
+
     name = summary.get("name") or fallback_name
     url = summary.get("url") or f"https://steamcommunity.com/profiles/{st['steam_id']}"
     e = discord.Embed(title=f"{name} - Zero Hour", url=url, color=COLOR)
-    e.add_field(name="K/D", value=f"{st['kd']}")
-    e.add_field(name="Kills / Deaths", value=f"{st['kills']:,} / {st['deaths']:,}")
-    e.add_field(name="Win rate", value=f"{st['win_rate']}%")
-    e.add_field(name="Wins / Losses", value=f"{st['wins']:,} / {st['losses']:,}")
-    e.add_field(name="Matches", value=f"{st['matches']:,}")
-    e.add_field(name="Damage done", value=f"{st['damage']:,}")
+    e.add_field(name="K/D", value=num(st["kd"]))
+    e.add_field(name="Kills / Deaths", value=f"{num(st['kills'])} / {num(st['deaths'])}")
+    e.add_field(name="Win rate", value=num(st["win_rate"], "%"))
+    e.add_field(name="Wins / Losses", value=f"{num(st['wins'])} / {num(st['losses'])}")
+    e.add_field(name="Matches", value=num(st["matches"]))
+    e.add_field(name="Damage done", value=num(st["damage"]))
     if st.get("matchpoints") is not None:
-        e.add_field(name="Total matchpoints", value=f"{st['matchpoints']:,}")
+        e.add_field(name="Total matchpoints", value=num(st["matchpoints"]))
     top = leaderboard_entry(st["steam_id"])  # only if the Steam top 200 is already loaded
     if top:
         e.add_field(name="Steam rank", value=f"#{top['rank']} of 200")
-        e.add_field(name="Leaderboard matchpoints", value=f"{top['score']:,}")
     if summary.get("avatar"):
         e.set_thumbnail(url=summary["avatar"])
-    e.set_footer(text="Lifetime stats from Steam | updated every 10 minutes")
+    footer = "Lifetime stats from Steam | updated every 10 minutes"
+    if st.get("incomplete"):
+        footer = "Steam's data for this player looks incomplete, so kills, losses, K/D and win rate are hidden. | " + footer
+    e.set_footer(text=footer)
     return e
 
 
@@ -156,12 +162,29 @@ def local_stats_embed(s: dict) -> discord.Embed:
 
 
 @client.tree.command(name="stats", description="Show a player's overall Zero Hour stats")
-@app_commands.describe(player="Steam name (top 200), Steam ID, or Steam profile link")
+@app_commands.describe(player="Player name (or part of it), Steam ID, or Steam profile link")
 async def stats(interaction: discord.Interaction, player: str):
     await interaction.response.defer(ephemeral=private(interaction))
-    local = await asyncio.to_thread(player_stats, player)  # matches this bot has tracked, if any
+
+    # Names the bot has tracked (full or partial). A Steam ID or profile link skips this search.
+    matches = [] if steam_stats.is_direct(player) else await asyncio.to_thread(find_players, player)
+    if len(matches) > 1:
+        shown = matches[:10]
+        lines = [f"{link(m['name'], steam_url(m['player_key']))} - `{m['player_key']}`" for m in shown]
+        title = f"{len(shown)}{'+' if len(matches) > 10 else ''} players match \"{player}\""
+        e = discord.Embed(
+            title=title,
+            description="\n".join(lines) + "\n\nRun /stats again with the full name or the Steam ID.",
+            color=COLOR,
+        )
+        await respond(interaction, embed=e)
+        return
+
+    local = await asyncio.to_thread(player_stats, matches[0]["name"]) if matches else None
     try:
-        steam_id = await asyncio.to_thread(find_steam_id, player, local.get("player_key") if local else None)
+        steam_id = await asyncio.to_thread(
+            find_steam_id, local["name"] if local else player, local.get("player_key") if local else None
+        )
         st = await asyncio.to_thread(get_user_stats, steam_id)
         summary = await asyncio.to_thread(get_summary, steam_id)
     except SteamStatsError as err:

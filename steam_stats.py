@@ -26,10 +26,9 @@ import steam_leaderboard
 APP_ID = steam_leaderboard.APP_ID
 CACHE_SECONDS = 600
 
-# Which Steam stat holds a player's total matchpoints. Not known yet (the candidates are
-# "zh_MP4", "zh_MP6" and "zh_MP7"), so it is left off. Once you know which one matches the Steam
-# leaderboard total, put its name here, e.g. MATCHPOINT_STAT = "zh_MP7".
-MATCHPOINT_STAT = None
+# The Steam stat that holds a player's total matchpoints. Checked against the in-game profile:
+# a player showing 15284 matchpoints in game has zh_MP7 = 15284.
+MATCHPOINT_STAT = "zh_MP7"
 
 
 class SteamStatsError(Exception):
@@ -111,6 +110,12 @@ def _resolve_vanity(name: str) -> str:
     raise PlayerNotFound("I couldn't find that player on Steam.")
 
 
+def is_direct(query: str) -> bool:
+    """True if the text is a Steam ID or a Steam profile link (so no name search is needed)."""
+    q = query.strip()
+    return bool(re.fullmatch(r"\d{17}", q) or re.search(r"steamcommunity\.com/(?:profiles|id)/", q))
+
+
 def find_steam_id(query: str, local_key=None) -> str:
     """Works out a 17-digit Steam ID from what the user typed: an ID, a profile link, or a name."""
     q = query.strip()
@@ -161,24 +166,46 @@ def get_user_stats(steam_id: str) -> dict:
     raw_stats = (data.get("playerstats") or {}).get("stats")
     if not raw_stats:
         raise PrivateProfile("No stats are available for that player.")
-    values = {s["name"]: s.get("value", 0) for s in raw_stats}  # stats Steam doesn't list count as 0
+    values = {st["name"]: st.get("value") for st in raw_stats}
 
-    kills = values.get("zh_Kills", 0)
-    deaths = values.get("zh_Deaths", 0)
-    wins = values.get("zh_MatchesWon", 0)
-    losses = values.get("zh_MatchesLost", 0)
-    matches = wins + losses
+    def stat(name):
+        """A stat's number, or None if Steam didn't send it (never guessed as 0)."""
+        v = values.get(name)
+        return v if isinstance(v, (int, float)) else None
+
+    kills, deaths = stat("zh_Kills"), stat("zh_Deaths")
+    wins, losses = stat("zh_MatchesWon"), stat("zh_MatchesLost")
+
+    # Safeguard: Steam sometimes reports 0 kills for a player who has deaths. The game's own profile
+    # screen showed real kills in that case, so Steam's copy was not up to date. Treat the kill count as
+    # unknown, and don't trust the loss count, match count or win rate either.
+    incomplete = kills == 0 and bool(deaths)
+    if incomplete:
+        kills = None
+        losses = None  # the loss count was also behind in the one case seen, so it is not trusted either
+
+    if kills is not None and deaths:
+        kd = round(kills / deaths, 2)
+    elif kills is not None and deaths == 0:
+        kd = float(kills)
+    else:
+        kd = None
+
+    matches = wins + losses if wins is not None and losses is not None else None
+    win_rate = round(100 * wins / matches, 1) if matches and not incomplete else None
+
     result = {
         "steam_id": steam_id,
         "kills": kills,
         "deaths": deaths,
-        "kd": round(kills / deaths, 2) if deaths else float(kills),
+        "kd": kd,
         "wins": wins,
         "losses": losses,
         "matches": matches,
-        "win_rate": round(100 * wins / matches, 1) if matches else 0.0,
-        "damage": values.get("zh_DamagesDone", 0),
-        "matchpoints": values.get(MATCHPOINT_STAT) if MATCHPOINT_STAT else None,
+        "win_rate": win_rate,
+        "damage": stat("zh_DamagesDone"),
+        "matchpoints": stat(MATCHPOINT_STAT) if MATCHPOINT_STAT else None,
+        "incomplete": incomplete,
         "raw": values,
     }
     with _lock:

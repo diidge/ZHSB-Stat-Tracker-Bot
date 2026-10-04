@@ -179,15 +179,31 @@ def player_stats(name: str) -> Optional[dict]:
         ).fetchall()
         maps = _map_stats(c, p["id"])
     out = _finish(row)
-    out.update(name=p["name"], last_seen=p["last_seen"], recent_matches=[{**dict(r), "map": map_name(r["map"])} for r in recent], maps=maps)
+    out.update(name=p["name"], player_key=p["player_key"], last_seen=p["last_seen"], recent_matches=[{**dict(r), "map": map_name(r["map"])} for r in recent], maps=maps)
     return out
+
+
+def find_players(query: str, limit: int = 11) -> list:
+    """Players whose name matches. An exact name (any capitals) wins; otherwise any name containing the text."""
+    q = query.strip()
+    if not q:
+        return []
+    cols = "SELECT name, player_key, last_seen FROM players"
+    with db() as c:
+        rows = c.execute(f"{cols} WHERE name = ? COLLATE NOCASE ORDER BY last_seen DESC LIMIT ?", (q, limit)).fetchall()
+        if not rows:
+            escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            rows = c.execute(
+                f"{cols} WHERE name LIKE ? ESCAPE '\\' ORDER BY last_seen DESC LIMIT ?", (f"%{escaped}%", limit)
+            ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def leaderboard(sort: str = "kd", min_matches: int = 5, limit: int = 50) -> list:
     rows = []
     with db() as c:
         for r in c.execute(
-            f"SELECT p.name, {AGG} FROM match_players mp JOIN players p ON p.id = mp.player_id GROUP BY p.id"
+            f"SELECT p.name, p.player_key, {AGG} FROM match_players mp JOIN players p ON p.id = mp.player_id GROUP BY p.id"
         ):
             if r["matches"] >= min_matches:
                 rows.append(_finish(r))
