@@ -1,7 +1,7 @@
 """
 Zero Hour Discord bot. Slash commands: /stats, /mapstats, /leaderboard, /rank, /top10, /training, /playercount, /showservers
 
-Needs these files in the same folder: zerohour_bot.py, zerohour_db.py,
+Needs these files in the same folder: zerohour_bot.py, zerohour_db.py, steam_stats.py,
 steam_leaderboard.py, zhsb_feed.py. (/rank reads the Steam top 200 and does not need the client.)
 
 Setup:
@@ -23,7 +23,9 @@ import discord
 from discord import app_commands
 
 import steam_leaderboard
+import steam_stats
 from steam_leaderboard import BOARD_ID, get_current_players, get_leaderboard, get_top, search as search_steam
+from steam_stats import SteamStatsError, find_steam_id, get_summary, get_user_stats, leaderboard_entry
 from zerohour_db import leaderboard, player_stats
 from zhsb_feed import dig, get_map_images, get_zhsb
 
@@ -119,14 +121,29 @@ def not_found(name: str) -> str:
     return f"No stats found for **{name}**. They may not have been tracked yet."
 
 
-@client.tree.command(name="stats", description="Show a player's overall Zero Hour stats")
-@app_commands.describe(player="The player's name")
-async def stats(interaction: discord.Interaction, player: str):
-    await interaction.response.defer(ephemeral=private(interaction))
-    s = await asyncio.to_thread(player_stats, player)
-    if not s:
-        await respond(interaction, not_found(player))
-        return
+def steam_stats_embed(st: dict, summary: dict, fallback_name: str) -> discord.Embed:
+    name = summary.get("name") or fallback_name
+    url = summary.get("url") or f"https://steamcommunity.com/profiles/{st['steam_id']}"
+    e = discord.Embed(title=f"{name} - Zero Hour", url=url, color=COLOR)
+    e.add_field(name="K/D", value=f"{st['kd']}")
+    e.add_field(name="Kills / Deaths", value=f"{st['kills']:,} / {st['deaths']:,}")
+    e.add_field(name="Win rate", value=f"{st['win_rate']}%")
+    e.add_field(name="Wins / Losses", value=f"{st['wins']:,} / {st['losses']:,}")
+    e.add_field(name="Matches", value=f"{st['matches']:,}")
+    e.add_field(name="Damage done", value=f"{st['damage']:,}")
+    if st.get("matchpoints") is not None:
+        e.add_field(name="Total matchpoints", value=f"{st['matchpoints']:,}")
+    top = leaderboard_entry(st["steam_id"])  # only if the Steam top 200 is already loaded
+    if top:
+        e.add_field(name="Steam rank", value=f"#{top['rank']} of 200")
+        e.add_field(name="Leaderboard matchpoints", value=f"{top['score']:,}")
+    if summary.get("avatar"):
+        e.set_thumbnail(url=summary["avatar"])
+    e.set_footer(text="Lifetime stats from Steam | updated every 10 minutes")
+    return e
+
+
+def local_stats_embed(s: dict) -> discord.Embed:
     e = discord.Embed(title=f"{s['name']} - Zero Hour", url=steam_url(s.get("player_key")), color=COLOR)
     e.add_field(name="K/D", value=f"{s['kd']}")
     e.add_field(name="Wins / Losses", value=f"{s['wins']} / {s['losses']}")
@@ -134,7 +151,31 @@ async def stats(interaction: discord.Interaction, player: str):
     e.add_field(name="Matches", value=f"{s['matches']}")
     e.add_field(name="Total matchpoints", value=f"{s['total_matchpoints']:,}")
     e.add_field(name="Avg matchpoints", value=f"{s['avg_matchpoints']}")
-    await respond(interaction, embed=e)
+    e.set_footer(text="From matches tracked by this bot")
+    return e
+
+
+@client.tree.command(name="stats", description="Show a player's overall Zero Hour stats")
+@app_commands.describe(player="Steam name (top 200), Steam ID, or Steam profile link")
+async def stats(interaction: discord.Interaction, player: str):
+    await interaction.response.defer(ephemeral=private(interaction))
+    local = await asyncio.to_thread(player_stats, player)  # matches this bot has tracked, if any
+    try:
+        steam_id = await asyncio.to_thread(find_steam_id, player, local.get("player_key") if local else None)
+        st = await asyncio.to_thread(get_user_stats, steam_id)
+        summary = await asyncio.to_thread(get_summary, steam_id)
+    except SteamStatsError as err:
+        print(f"[stats] {type(err).__name__}: {err}")  # shows in the host's console
+        if local:  # Steam has nothing, but the bot has tracked this player's matches
+            await respond(interaction, embed=local_stats_embed(local))
+        elif isinstance(err, steam_stats.PrivateProfile):
+            await respond(interaction, f"I found **{player}**, but their Steam game details are private, so their stats can't be read.")
+        elif isinstance(err, (steam_stats.NotConfigured, steam_stats.BadKey)):
+            await respond(interaction, "Steam stats aren't available right now. Please tell the bot's owner.")
+        else:
+            await respond(interaction, str(err) or not_found(player))
+        return
+    await respond(interaction, embed=steam_stats_embed(st, summary, local["name"] if local else player))
 
 
 @client.tree.command(name="mapstats", description="Show a player's stats by map")
