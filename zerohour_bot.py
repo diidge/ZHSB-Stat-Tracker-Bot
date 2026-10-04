@@ -278,7 +278,7 @@ async def showservers(interaction: discord.Interaction):
     count = dig(data, "totals", "public", "rooms", default=len(rooms))
     images = await get_map_images()
 
-    # One embed per server, each with its map picture at the bottom (Discord allows 10 per message).
+    # One embed per server, each with its map picture on the right (Discord allows 10 per message).
     # Your own pictures from the "maps" folder are used first; otherwise the ones from zhsb.info.
     embeds, files = [], []
     for n, r in enumerate(rooms[:10]):
@@ -292,9 +292,9 @@ async def showservers(interaction: discord.Interaction):
         if path:
             filename = f"map{n}{os.path.splitext(path)[1].lower()}"
             files.append(discord.File(path, filename=filename))
-            e.set_image(url=f"attachment://{filename}")
+            e.set_thumbnail(url=f"attachment://{filename}")
         elif web:
-            e.set_image(url=web)
+            e.set_thumbnail(url=web)
         else:
             print(f"[showservers] no picture found for map: {r.get('map')}")  # shows in the host's console
         embeds.append(e)
