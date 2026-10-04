@@ -1,7 +1,7 @@
 """
 Zero Hour Discord bot. Slash commands: /stats, /mapstats, /leaderboard, /rank, /top10, /training, /playercount, /showservers
 
-Needs these four files in the same folder: zerohour_bot.py, zerohour_tracker.py,
+Needs these files in the same folder: zerohour_bot.py, zerohour_db.py,
 steam_leaderboard.py, zhsb_feed.py. (/rank reads the Steam top 200 and does not need the client.)
 
 Setup:
@@ -10,7 +10,7 @@ Setup:
     export DISCORD_TOKEN=your-bot-token     (Mac/Linux)
     python zerohour_bot.py
 
-Keep this file in the same folder as zerohour_tracker.py. The bot reads the same
+Keep this file in the same folder as zerohour_db.py. The bot reads the same
 database file (zerohour_stats.db) that the tracker fills with match data.
 """
 import asyncio
@@ -23,7 +23,7 @@ from discord import app_commands
 
 import steam_leaderboard
 from steam_leaderboard import BOARD_ID, get_current_players, get_leaderboard, get_top, search as search_steam
-from zerohour_tracker import leaderboard, player_stats
+from zerohour_db import leaderboard, player_stats
 from zhsb_feed import dig, get_zhsb
 
 COLOR = 0x2B8CFF
