@@ -24,7 +24,7 @@ from discord import app_commands
 import steam_leaderboard
 from steam_leaderboard import BOARD_ID, get_current_players, get_leaderboard, get_top, search as search_steam
 from zerohour_db import leaderboard, player_stats
-from zhsb_feed import dig, get_zhsb
+from zhsb_feed import dig, get_map_images, get_zhsb
 
 COLOR = 0x2B8CFF
 
@@ -250,22 +250,25 @@ async def showservers(interaction: discord.Interaction):
 
     players = dig(data, "totals", "public", "players", default="?")
     count = dig(data, "totals", "public", "rooms", default=len(rooms))
-    blocks = [
-        f"**{dig(r, 'region', 'name')} | {dig(r, 'match', 'id')}** ({dig(r, 'players', 'summary')})\n"
-        f"{dig(r, 'map', 'name')} - {dig(r, 'game', 'summary')}\n"
-        f"{dig(r, 'match', 'summary')}"
-        for r in rooms[:10]
-    ]
-    if len(rooms) > 10:
-        blocks.append(f"...and {len(rooms) - 10} more")
+    images = await get_map_images()
+
+    # One small embed per server, each with its map picture on the right (Discord allows 10 per message).
+    embeds = []
+    for r in rooms[:10]:
+        e = discord.Embed(
+            title=f"{dig(r, 'region', 'name')} | {dig(r, 'match', 'id')} ({dig(r, 'players', 'summary')})",
+            description=f"{dig(r, 'map', 'name')} - {dig(r, 'game', 'summary')}\n{dig(r, 'match', 'summary')}",
+            color=COLOR,
+        )
+        picture = images.get(str(dig(r, "map", "id"))) or images.get(str(dig(r, "map", "name")).lower())
+        if picture:
+            e.set_thumbnail(url=picture)
+        embeds.append(e)
+
     age = int(time.time() - fetched_at)
-    e = discord.Embed(
-        title=f"{players} players in {count} public servers",
-        description="\n\n".join(blocks),
-        color=COLOR,
-    )
-    e.set_footer(text=f"Source: zhsb.info | public servers only | updated {age}s ago")
-    await respond(interaction, embed=e)
+    more = f" | ...and {len(rooms) - 10} more" if len(rooms) > 10 else ""
+    embeds[-1].set_footer(text=f"Source: zhsb.info | public servers only | updated {age}s ago{more}")
+    await respond(interaction, f"**{players} players in {count} public servers**", embeds=embeds)
 
 
 if __name__ == "__main__":

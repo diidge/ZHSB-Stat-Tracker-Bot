@@ -10,8 +10,11 @@ seconds, so the site is contacted at most about twice a minute however many
 people use the commands. Nothing needs installing: aiohttp comes with discord.py.
 """
 import asyncio
+import html
 import json
+import re
 import time
+from urllib.parse import urljoin
 
 import aiohttp
 
@@ -87,3 +90,52 @@ if __name__ == "__main__":
             print(f"  {dig(r, 'region', 'name')} | {dig(r, 'match', 'id')} | {dig(r, 'players', 'summary')} | "
                   f"{dig(r, 'map', 'name')} | {dig(r, 'match', 'summary')}")
     asyncio.run(_test())
+
+
+# --------------------------------------------------------------------------
+# Map pictures
+# --------------------------------------------------------------------------
+# The site's home page lists a picture for every map. The picture addresses contain a
+# code that changes whenever the site is updated, so the bot reads them from the page
+# (every 6 hours) instead of storing them. Discord loads the pictures from zhsb.info itself.
+PAGE_URL = "https://zhsb.info/"
+IMAGE_CACHE_SECONDS = 6 * 3600
+IMAGE_RETRY_SECONDS = 300   # after a failed attempt, wait this long before trying again
+
+_img_lock = asyncio.Lock()
+_img_cache = {"at": 0.0, "tried": 0.0, "images": {}}
+
+
+def parse_map_images(page: str) -> dict:
+    """Finds the map pictures in the site's HTML. Returns {map number or lowercase map name: picture URL}."""
+    images = {}
+    for tag in re.findall(r"<img\b[^>]*>", page, re.I):
+        src = re.search(r"""src=(["'])([^"']*/maps/[^"']+?)\1""", tag, re.I)
+        if not src:
+            continue
+        url = urljoin(PAGE_URL, html.unescape(src.group(2)))
+        alt = re.search(r"""alt=(["'])(.*?)\1""", tag, re.I)
+        number = re.search(r"/maps/(\d+)\.", url)
+        if alt:
+            images[html.unescape(alt.group(2)).strip().lower()] = url
+        if number:
+            images[number.group(1)] = url
+    return images
+
+
+async def get_map_images() -> dict:
+    """Returns the map picture lookup (empty if the site can't be reached; the bot then just shows no pictures)."""
+    async with _img_lock:
+        now = time.time()
+        stale = not _img_cache["images"] or now - _img_cache["at"] >= IMAGE_CACHE_SECONDS
+        if stale and now - _img_cache["tried"] >= IMAGE_RETRY_SECONDS:
+            _img_cache["tried"] = now
+            try:
+                async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}) as session:
+                    async with session.get(PAGE_URL, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                        images = parse_map_images(await resp.text())
+                if images:
+                    _img_cache.update(at=now, images=images)
+            except Exception:
+                pass  # keep whatever we had before
+        return _img_cache["images"]
