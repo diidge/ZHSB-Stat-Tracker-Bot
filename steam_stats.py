@@ -52,8 +52,39 @@ class PrivateProfile(SteamStatsError):
     pass
 
 
-def _api(path: str, **params) -> dict:
+def _read_env_file(path: str) -> dict:
+    """Reads KEY=VALUE lines from a .env file. Returns {} if there isn't one."""
+    values = {}
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    values[k.replace("export ", "").strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return values
+
+
+def _get_key() -> str:
+    """The Steam API key: from the environment, or else straight from the .env file next to this file."""
     key = os.environ.get("STEAM_API_KEY", "").strip()
+    if key:
+        return key
+    here = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(here, ".env")
+    found = _read_env_file(env_path)
+    key = found.get("STEAM_API_KEY", "").strip()
+    if not key:
+        # Print only names, never values, to help find the problem.
+        print(f"[steam_stats] No STEAM_API_KEY found. Looked for {env_path} "
+              f"(exists: {os.path.exists(env_path)}). Setting names in it: {sorted(found)}")
+    return key
+
+
+def _api(path: str, **params) -> dict:
+    key = _get_key()
     if not key:
         raise NotConfigured("Steam stats aren't set up yet (no Steam API key).")
     url = f"https://api.steampowered.com/{path}?" + urllib.parse.urlencode({**params, "key": key})
