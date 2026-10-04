@@ -252,7 +252,7 @@ async def showservers(interaction: discord.Interaction):
     count = dig(data, "totals", "public", "rooms", default=len(rooms))
     images = await get_map_images()
 
-    # One small embed per server, each with its map picture on the right (Discord allows 10 per message).
+    # One small embed per server, each with its map picture at the bottom (Discord allows 10 per message).
     embeds = []
     for r in rooms[:10]:
         e = discord.Embed(
@@ -262,7 +262,7 @@ async def showservers(interaction: discord.Interaction):
         )
         picture = images.get(str(dig(r, "map", "id"))) or images.get(str(dig(r, "map", "name")).lower())
         if picture:
-            e.set_thumbnail(url=picture)
+            e.set_image(url=picture)
         embeds.append(e)
 
     age = int(time.time() - fetched_at)
