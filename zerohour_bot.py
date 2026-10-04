@@ -97,10 +97,13 @@ client = StatsBot()
 
 def link(name: str, url) -> str:
     """Bold player name that links to their Steam profile (plain bold name if there is no link)."""
-    safe = discord.utils.escape_markdown(str(name)).replace("[", "\\[").replace("]", "\\]")
-    # Discord refuses to turn text that looks like a web address (e.g. "discord.gg/zhsb") into a link,
-    # so an invisible space is added after dots and "://" to stop the name looking like an address.
-    safe = re.sub(r"\.(?=\w)", ".\u200b", safe).replace("://", ":\u200b//")
+    text = str(name)
+    if url:
+        # Discord won't make a link out of text that contains square brackets or looks like a web
+        # address (e.g. "discord.gg/zhsb"), so inside a link those characters are swapped for
+        # look-alikes: full-width brackets and a "one dot leader".
+        text = text.replace("[", "\uff3b").replace("]", "\uff3d").replace(".", "\u2024")
+    safe = discord.utils.escape_markdown(text)
     return f"**[{safe}]({url})**" if url else f"**{safe}**"
 
 
