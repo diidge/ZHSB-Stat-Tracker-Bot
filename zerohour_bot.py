@@ -15,6 +15,7 @@ database file (zerohour_stats.db) that the tracker fills with match data.
 """
 import asyncio
 import os
+import re
 import time
 from typing import Optional
 
@@ -27,6 +28,31 @@ from zerohour_db import leaderboard, player_stats
 from zhsb_feed import dig, get_map_images, get_zhsb
 
 COLOR = 0x2B8CFF
+
+# Your own map pictures: put them in a folder named "maps" next to this file. Name each one by the
+# map's number or its name, e.g. 5.png, bank heist.png, Bank_Heist.jpg (capitals, spaces and
+# symbols don't matter; .png .jpg .jpeg .webp all work).
+MAP_PICTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maps")
+
+
+def _simplify(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(text).lower())
+
+
+def local_map_picture(room: dict):
+    """Finds your own picture for a server's map in the maps folder. Returns a file path or None."""
+    if not os.path.isdir(MAP_PICTURE_DIR):
+        return None
+    files = {}
+    for name in os.listdir(MAP_PICTURE_DIR):
+        stem, ext = os.path.splitext(name)
+        if ext.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+            files.setdefault(_simplify(stem), os.path.join(MAP_PICTURE_DIR, name))
+    for label in (dig(room, "map", "id"), dig(room, "map", "name")):
+        key = _simplify(label)
+        if key and key in files:
+            return files[key]
+    return None
 
 
 async def respond(interaction: discord.Interaction, content: Optional[str] = None, **kwargs):
@@ -252,23 +278,32 @@ async def showservers(interaction: discord.Interaction):
     count = dig(data, "totals", "public", "rooms", default=len(rooms))
     images = await get_map_images()
 
-    # One small embed per server, each with its map picture at the bottom (Discord allows 10 per message).
-    embeds = []
-    for r in rooms[:10]:
+    # One embed per server, each with its map picture at the bottom (Discord allows 10 per message).
+    # Your own pictures from the "maps" folder are used first; otherwise the ones from zhsb.info.
+    embeds, files = [], []
+    for n, r in enumerate(rooms[:10]):
         e = discord.Embed(
             title=f"{dig(r, 'region', 'name')} | {dig(r, 'match', 'id')} ({dig(r, 'players', 'summary')})",
             description=f"{dig(r, 'map', 'name')} - {dig(r, 'game', 'summary')}\n{dig(r, 'match', 'summary')}",
             color=COLOR,
         )
-        picture = images.get(str(dig(r, "map", "id"))) or images.get(str(dig(r, "map", "name")).lower())
-        if picture:
-            e.set_image(url=picture)
+        path = local_map_picture(r)
+        web = images.get(str(dig(r, "map", "id"))) or images.get(str(dig(r, "map", "name")).lower())
+        if path:
+            filename = f"map{n}{os.path.splitext(path)[1].lower()}"
+            files.append(discord.File(path, filename=filename))
+            e.set_image(url=f"attachment://{filename}")
+        elif web:
+            e.set_image(url=web)
+        else:
+            print(f"[showservers] no picture found for map: {r.get('map')}")  # shows in the host's console
         embeds.append(e)
 
     age = int(time.time() - fetched_at)
     more = f" | ...and {len(rooms) - 10} more" if len(rooms) > 10 else ""
     embeds[-1].set_footer(text=f"Source: zhsb.info | public servers only | updated {age}s ago{more}")
-    await respond(interaction, f"**{players} players in {count} public servers**", embeds=embeds)
+    extra = {"files": files} if files else {}
+    await respond(interaction, f"**{players} players in {count} public servers**", embeds=embeds, **extra)
 
 
 if __name__ == "__main__":
