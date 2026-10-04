@@ -95,6 +95,20 @@ class StatsBot(discord.Client):
 client = StatsBot()
 
 
+def link(name: str, url) -> str:
+    """Bold player name that links to their Steam profile (plain bold name if there is no link)."""
+    safe = discord.utils.escape_markdown(str(name)).replace("[", "\\[").replace("]", "\\]")
+    return f"**[{safe}]({url})**" if url else f"**{safe}**"
+
+
+def steam_url(player_key):
+    """The tracker stores the game's player ID. If it is a Steam ID number, return the profile link."""
+    key = str(player_key or "")
+    if re.fullmatch(r"7656119\d{10}", key):
+        return f"https://steamcommunity.com/profiles/{key}"
+    return None
+
+
 def not_found(name: str) -> str:
     return f"No stats found for **{name}**. They may not have been tracked yet."
 
@@ -107,7 +121,7 @@ async def stats(interaction: discord.Interaction, player: str):
     if not s:
         await respond(interaction, not_found(player))
         return
-    e = discord.Embed(title=f"{s['name']} - Zero Hour", color=COLOR)
+    e = discord.Embed(title=f"{s['name']} - Zero Hour", url=steam_url(s.get("player_key")), color=COLOR)
     e.add_field(name="K/D", value=f"{s['kd']}")
     e.add_field(name="Wins / Losses", value=f"{s['wins']} / {s['losses']}")
     e.add_field(name="Win rate", value=f"{s['win_rate']}%")
@@ -163,7 +177,7 @@ async def leaderboard_cmd(
         await respond(interaction, "No players match that filter yet.")
         return
     lines = [
-        f"`{i}.` **{r['name']}** - K/D {r['kd']} | {r['wins']}-{r['losses']} | {r['total_matchpoints']:,} pts"
+        f"`{i}.` {link(r['name'], steam_url(r.get('player_key')))} - K/D {r['kd']} | {r['wins']}-{r['losses']} | {r['total_matchpoints']:,} pts"
         for i, r in enumerate(rows, 1)
     ]
     title = f"Top 10 by {sort.name if sort else 'K/D'}"
@@ -192,7 +206,7 @@ async def rank(interaction: discord.Interaction, player: str):
     footer = f"Steam MP Points leaderboard, top 200 | updated {age} min ago"
 
     if len(matches) > 1:
-        lines = [f"`#{m['rank']}` **{m['name']}** - {m['score']:,} pts" for m in matches[:5]]
+        lines = [f"`#{m['rank']}` {link(m['name'], m['url'])} - {m['score']:,} pts" for m in matches[:5]]
         e = discord.Embed(
             title=f"{len(matches)} players match \"{player}\"",
             description="\n".join(lines) + "\n\nTry the full name, a Steam ID, or a profile link to narrow it down.",
@@ -211,7 +225,7 @@ async def rank(interaction: discord.Interaction, player: str):
 
 def top_embed(title: str, entries: list, fetched_at: float, unit: str) -> discord.Embed:
     lines = [
-        f"`#{e['rank']}` **{discord.utils.escape_markdown(e['name'])}** - {e['score']:,}{unit}"
+        f"`#{e['rank']}` {link(e['name'], e.get('url'))} - {e['score']:,}{unit}"
         for e in entries
     ]
     e = discord.Embed(title=title, description="\n".join(lines), color=COLOR)

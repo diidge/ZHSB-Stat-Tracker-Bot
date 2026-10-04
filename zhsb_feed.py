@@ -86,6 +86,13 @@ if __name__ == "__main__":
     async def _test():
         data, _ = await get_zhsb()
         print("Connected. Public:", dig(data, "totals", "public"), "| All:", dig(data, "totals", "all"))
+        print("\n--- raw totals ---")
+        print(json.dumps(data.get("totals"), indent=1))
+        rooms = data.get("rooms") or []
+        print(f"\n--- {len(rooms)} rooms in the list; first room, raw ---")
+        if rooms:
+            print(json.dumps(rooms[0], indent=1))
+        print("\n--- one line per room ---")
         for r in data.get("rooms", []):
             print(f"  {dig(r, 'region', 'name')} | {dig(r, 'match', 'id')} | {dig(r, 'players', 'summary')} | "
                   f"{dig(r, 'map', 'name')} | {dig(r, 'match', 'summary')}")
