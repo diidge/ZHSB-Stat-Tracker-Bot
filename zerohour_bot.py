@@ -65,7 +65,7 @@ def local_map_picture(room: dict):
         stem, ext = os.path.splitext(name)
         if ext.lower() in (".png", ".jpg", ".jpeg", ".webp"):
             files.setdefault(_simplify(stem), os.path.join(MAP_PICTURE_DIR, name))
-    for label in (dig(room, "map", "id"), dig(room, "map", "name")):
+    for label in (dig(room, "map", "int"), dig(room, "map", "name")):
         key = _simplify(label)
         if key and key in files:
             return files[key]
@@ -284,8 +284,10 @@ async def playercount(interaction: discord.Interaction):
         e.add_field(name="Playing on Steam", value=f"{steam:,}")
         sources.append("Steam")
     if site is not None:
-        e.add_field(name="In public servers", value=f"{dig(site, 'totals', 'public', 'players', default=0)}")
-        e.add_field(name="In all servers", value=f"{dig(site, 'totals', 'all', 'players', default=0)}")
+        for label, group in (("Public servers", "public"), ("All servers", "all")):
+            n_players = dig(site, "totals", group, "players", default=0)
+            n_rooms = dig(site, "totals", group, "rooms", default=0)
+            e.add_field(name=label, value=f"{n_players} players\n{n_rooms} servers")
         sources.append("zhsb.info")
     e.set_footer(text="Sources: " + ", ".join(sources) + " | refreshed every 30-60 seconds")
     await respond(interaction, embed=e)
@@ -319,7 +321,7 @@ async def showservers(interaction: discord.Interaction):
             color=COLOR,
         )
         path = local_map_picture(r)
-        web = images.get(str(dig(r, "map", "id"))) or images.get(str(dig(r, "map", "name")).lower())
+        web = images.get(str(dig(r, "map", "int"))) or images.get(str(dig(r, "map", "name")).lower())
         if path:
             filename = f"map{n}{os.path.splitext(path)[1].lower()}"
             files.append(discord.File(path, filename=filename))
