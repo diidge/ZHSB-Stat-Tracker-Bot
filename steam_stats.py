@@ -226,10 +226,13 @@ def get_summary(steam_id: str) -> dict:
 
 
 def leaderboard_entry(steam_id: str):
-    """The player's Steam top-200 entry, if the leaderboard is already loaded (never fetches it)."""
-    for e in steam_leaderboard._cache.get("entries", []):
+    """The player's Steam rank ({'rank', 'score', 'total'}) if a leaderboard is already loaded (never fetches it)."""
+    hit = steam_leaderboard.cached_rank(steam_id)
+    if hit:
+        return hit
+    for e in steam_leaderboard._cache.get("entries", []):  # top-200 copy with names
         if e["profile"] == steam_id:
-            return e
+            return {"rank": e["rank"], "score": e["score"], "total": None}
     return None
 
 

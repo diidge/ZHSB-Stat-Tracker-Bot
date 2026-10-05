@@ -1,12 +1,19 @@
 """
-Reads the public Steam "MP Points" leaderboard for Zero Hour (top 200 players).
+Reads the public Steam "MP Points" leaderboard for Zero Hour.
 
-Test it on its own (prints the top 5 so you can check it works):
+Two sources are used:
+  * The XML version of the leaderboard lists EVERY player (rank, Steam ID, matchpoints),
+    about 5,000 per page. It has no names, so it is used for rank lookups by Steam ID.
+  * The normal web page shows names and pictures, but only for the top 200.
+
+Test it on its own (prints the top 5, then the size of the full leaderboard):
     python steam_leaderboard.py
+    python steam_leaderboard.py 76561198046397667     (also looks up that player's rank)
 
 Design notes:
-  * The leaderboard is only fetched when someone asks for it, then cached for an
-    hour, so the bot makes about 14 page requests per hour at most.
+  * Leaderboards are only fetched when someone asks for them, then cached for an hour.
+    The full XML leaderboard is about 20 pages (roughly 15 MB), so it is fetched at most
+    once an hour, not per command.
   * If Steam is unreachable, the last good copy is used instead.
 """
 import html
@@ -104,6 +111,80 @@ def get_leaderboard(force: bool = False):
         return entries, _cache["at"]
 
 
+# ---------------------------------------------------------------------------
+# Full leaderboard from Steam's XML pages (every player, but Steam IDs only - no names).
+# ---------------------------------------------------------------------------
+XML_PAGE_SIZE = 5000          # Steam returns at most this many entries per XML page
+XML_MAX_PAGES = 60            # safety stop (about 300,000 players)
+XML_CACHE_SECONDS = 3600
+XML_ENTRY_RE = re.compile(r"<entry><steamid>(\d+)</steamid><score>(-?\d+)</score><rank>(\d+)</rank>")
+XML_TOTAL_RE = re.compile(r"<totalLeaderboardEntries>(\d+)</totalLeaderboardEntries>")
+
+_index_lock = threading.Lock()
+_index = {"at": 0.0, "ranks": {}, "total": 0}   # ranks: {steam_id (int): (rank, score)}
+
+
+def _parse_xml_page(page: str):
+    """Reads one XML page. Returns (total_players, [(steam_id, score, rank), ...])."""
+    m = XML_TOTAL_RE.search(page)
+    total = int(m.group(1)) if m else 0
+    rows = [(int(a), int(b), int(c)) for a, b, c in XML_ENTRY_RE.findall(page)]
+    return total, rows
+
+
+def fetch_index():
+    """Downloads every XML page. Returns ({steam_id: (rank, score)}, total_players)."""
+    ranks, total, start = {}, 0, 1
+    for _ in range(XML_MAX_PAGES):
+        page = _get(f"{BASE}/?xml=1&start={start}")
+        page_total, rows = _parse_xml_page(page)
+        total = page_total or total
+        if not rows:
+            break
+        for steam_id, score, rank in rows:
+            ranks[steam_id] = (rank, score)
+        start += len(rows)
+        if total and start > total:
+            break
+        time.sleep(PAUSE_BETWEEN_PAGES)
+    if len(ranks) < 100:
+        raise RuntimeError("Could not read the Steam leaderboard XML (format may have changed).")
+    return ranks, max(total, len(ranks))
+
+
+def get_index(force: bool = False):
+    """Returns (ranks_by_steam_id, total_players, fetched_at). Cached; stale copy used if Steam is down."""
+    with _index_lock:
+        fresh = time.time() - _index["at"] < XML_CACHE_SECONDS
+        if _index["ranks"] and fresh and not force:
+            return _index["ranks"], _index["total"], _index["at"]
+        try:
+            ranks, total = fetch_index()
+        except Exception:
+            if _index["ranks"]:
+                return _index["ranks"], _index["total"], _index["at"]
+            raise
+        _index.update(at=time.time(), ranks=ranks, total=total)
+        return ranks, total, _index["at"]
+
+
+def lookup_rank(steam_id):
+    """Rank and matchpoints for a 17-digit Steam ID: {'rank', 'score', 'total'} or None if unranked.
+    Uses the cached leaderboard; fetches it if it has not been loaded yet."""
+    ranks, total, _ = get_index()
+    hit = ranks.get(int(steam_id))
+    return {"rank": hit[0], "score": hit[1], "total": total} if hit else None
+
+
+def cached_rank(steam_id):
+    """Same as lookup_rank but never downloads anything: None if the leaderboard isn't loaded yet."""
+    try:
+        hit = _index["ranks"].get(int(steam_id))
+    except (TypeError, ValueError):
+        return None
+    return {"rank": hit[0], "score": hit[1], "total": _index["total"]} if hit else None
+
+
 # The "Training Best Scores" leaderboard (the number at the end of its Steam link).
 # Lower scores rank higher on this one: #1 has the lowest number.
 TRAINING_BOARD_ID = 4951891
@@ -166,7 +247,12 @@ def search(entries: list, query: str) -> list:
 
 
 if __name__ == "__main__":
+    import sys
     rows, _ = get_leaderboard(force=True)
-    print(f"Read {len(rows)} entries. Top 5:")
+    print(f"Read {len(rows)} top entries. Top 5:")
     for e in rows[:5]:
         print(f"  #{e['rank']}  {e['name']}  -  {e['score']:,}  ({e['url']})")
+    ranks, total, _ = get_index(force=True)
+    print(f"Full leaderboard: {len(ranks):,} players read (Steam says {total:,}).")
+    if len(sys.argv) > 1:
+        print("Lookup:", lookup_rank(sys.argv[1]) or "not on the leaderboard")

@@ -2,7 +2,7 @@
 Zero Hour Discord bot. Slash commands: /stats, /mapstats, /leaderboard, /rank, /top10, /training, /playercount, /showservers
 
 Needs these files in the same folder: zerohour_bot.py, zerohour_db.py, steam_stats.py,
-steam_leaderboard.py, zhsb_feed.py. (/rank reads the Steam top 200 and does not need the client.)
+steam_leaderboard.py, zhsb_feed.py. (/rank reads the Steam leaderboard and does not need the client.)
 
 Setup:
     pip install discord.py fastapi uvicorn
@@ -24,8 +24,8 @@ from discord import app_commands
 
 import steam_leaderboard
 import steam_stats
-from steam_leaderboard import BOARD_ID, get_current_players, get_leaderboard, get_top, search as search_steam
-from steam_stats import SteamStatsError, find_steam_id, get_summary, get_user_stats, leaderboard_entry
+from steam_leaderboard import BOARD_ID, get_current_players, get_leaderboard, get_top, lookup_rank, search as search_steam
+from steam_stats import PlayerNotFound, SteamStatsError, find_steam_id, get_summary, get_user_stats, is_direct, leaderboard_entry
 from zerohour_db import find_players, leaderboard, player_stats
 from zhsb_feed import dig, get_map_images, get_zhsb
 
@@ -137,9 +137,9 @@ def steam_stats_embed(st: dict, summary: dict, fallback_name: str) -> discord.Em
     e.add_field(name="Damage done", value=num(st["damage"]))
     if st.get("matchpoints") is not None:
         e.add_field(name="Total matchpoints", value=num(st["matchpoints"]))
-    top = leaderboard_entry(st["steam_id"])  # only if the Steam top 200 is already loaded
+    top = leaderboard_entry(st["steam_id"])  # only if the Steam leaderboard is already loaded
     if top:
-        e.add_field(name="Steam rank", value=f"#{top['rank']} of 200")
+        e.add_field(name="Steam rank", value=f"#{top['rank']:,} of {top['total']:,}" if top.get("total") else f"#{top['rank']:,}")
     if summary.get("avatar"):
         e.set_thumbnail(url=summary["avatar"])
     footer = "Lifetime stats from Steam | updated every 10 minutes"
@@ -254,42 +254,77 @@ async def leaderboard_cmd(
     await respond(interaction, embed=discord.Embed(title=title, description="\n".join(lines), color=COLOR))
 
 
-@client.tree.command(name="rank", description="Check a player's rank and total matchpoints on the Steam top 200")
-@app_commands.describe(player="Steam name, Steam ID, or Steam profile link")
+@client.tree.command(name="rank", description="Check a player's Steam rank and total matchpoints")
+@app_commands.describe(player="Steam ID or profile link (any player), or a Steam name (top 200 only)")
 async def rank(interaction: discord.Interaction, player: str):
     await interaction.response.defer(ephemeral=private(interaction))
+    q = player.strip()
+    steam_id = None
+    top_entry = None  # the top-200 page entry, which carries a name and picture
+
+    if is_direct(q):
+        try:
+            steam_id = await asyncio.to_thread(find_steam_id, q)
+        except SteamStatsError as ex:
+            await respond(interaction, str(ex))
+            return
+    else:
+        try:  # names can only be searched on the top 200, because the full list has no names
+            entries, _ = await asyncio.to_thread(get_leaderboard)
+        except Exception:
+            entries = []
+        matches = search_steam(entries, q)
+        if len(matches) > 1:
+            lines = [f"`#{m['rank']}` {link(m['name'], m['url'])} - {m['score']:,} pts" for m in matches[:5]]
+            e = discord.Embed(
+                title=f"{len(matches)} players match \"{q}\"",
+                description="\n".join(lines) + "\n\nTry the full name, a Steam ID, or a profile link to narrow it down.",
+                color=COLOR,
+            )
+            await respond(interaction, embed=e)
+            return
+        if matches:
+            top_entry = matches[0]
+            ident = top_entry["profile"]
+            try:
+                steam_id = ident if ident.isdigit() else await asyncio.to_thread(find_steam_id, f"https://steamcommunity.com/id/{ident}")
+            except SteamStatsError:
+                steam_id = None
+        else:
+            try:  # last try: a custom profile name
+                steam_id = await asyncio.to_thread(find_steam_id, q)
+            except SteamStatsError:
+                await respond(interaction,
+                    f"I couldn't find **{q}**. Names can only be searched on the Steam top 200. "
+                    "For anyone else, use their Steam ID or profile link.")
+                return
+
     try:
-        entries, fetched_at = await asyncio.to_thread(get_leaderboard)
+        hit = await asyncio.to_thread(lookup_rank, steam_id)
     except Exception:
         await respond(interaction, "I couldn't reach the Steam leaderboard right now. Please try again in a few minutes.")
         return
 
-    matches = search_steam(entries, player)
-    if not matches:
-        await respond(interaction, 
-            f"I couldn't find **{player}** in the Steam top 200. Check the spelling, or they may be "
-            "ranked below 200, since Steam only publishes the top 200."
-        )
+    summary = {}
+    if top_entry:
+        summary = {"name": top_entry["name"], "url": top_entry["url"], "avatar": top_entry.get("avatar")}
+    else:
+        summary = await asyncio.to_thread(get_summary, steam_id)
+    name = summary.get("name") or steam_id
+    url = summary.get("url") or f"https://steamcommunity.com/profiles/{steam_id}"
+
+    if not hit:
+        await respond(interaction, f"**{name}** isn't on the Steam MP Points leaderboard (no matchpoints recorded yet).")
         return
 
-    age = max(1, int((time.time() - fetched_at) / 60))
-    footer = f"Steam MP Points leaderboard, top 200 | updated {age} min ago"
-
-    if len(matches) > 1:
-        lines = [f"`#{m['rank']}` {link(m['name'], m['url'])} - {m['score']:,} pts" for m in matches[:5]]
-        e = discord.Embed(
-            title=f"{len(matches)} players match \"{player}\"",
-            description="\n".join(lines) + "\n\nTry the full name, a Steam ID, or a profile link to narrow it down.",
-            color=COLOR,
-        )
-    else:
-        m = matches[0]
-        e = discord.Embed(title=m["name"], url=m["url"], color=COLOR)
-        e.add_field(name="Steam rank", value=f"#{m['rank']} of 200")
-        e.add_field(name="Total matchpoints", value=f"{m['score']:,}")
-        if m.get("avatar"):
-            e.set_thumbnail(url=m["avatar"])
-    e.set_footer(text=footer)
+    e = discord.Embed(title=name, url=url, color=COLOR)
+    e.add_field(name="Steam rank", value=f"#{hit['rank']:,} of {hit['total']:,}")
+    e.add_field(name="Total matchpoints", value=f"{hit['score']:,}")
+    if hit["total"]:
+        e.add_field(name="Top", value=f"{max(0.01, hit['rank'] / hit['total'] * 100):.2f}%")
+    if summary.get("avatar"):
+        e.set_thumbnail(url=summary["avatar"])
+    e.set_footer(text="Steam MP Points leaderboard | refreshed hourly")
     await respond(interaction, embed=e)
 
 
