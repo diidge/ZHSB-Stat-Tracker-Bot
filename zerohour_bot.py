@@ -26,7 +26,7 @@ import steam_leaderboard
 import steam_stats
 from steam_leaderboard import BOARD_ID, get_current_players, get_leaderboard, get_top, lookup_rank, search as search_steam
 from steam_stats import PlayerNotFound, SteamStatsError, find_steam_id, get_summary, get_user_stats, is_direct, leaderboard_entry
-from zerohour_db import find_players, leaderboard, player_stats
+from zerohour_db import find_players, get_link, leaderboard, player_stats, remove_link, set_link
 from zhsb_feed import dig, get_map_images, get_zhsb
 
 COLOR = 0x2B8CFF
@@ -42,6 +42,8 @@ EPHEMERAL = {
     "training": True,
     "playercount": False,
     "showservers": True,
+    "link": True,
+    "unlink": True,
 }
 
 
@@ -117,6 +119,19 @@ def steam_url(player_key):
     return None
 
 
+async def resolve_target(interaction: discord.Interaction, player: Optional[str], user: Optional[discord.User]):
+    """Works out who to look up. Returns (what_to_search, None) or (None, message_to_show)."""
+    if player:
+        return player, None
+    target = user or interaction.user
+    steam_id = await asyncio.to_thread(get_link, target.id)
+    if steam_id:
+        return steam_id, None
+    if user:
+        return None, f"**{user.display_name}** hasn't linked a Steam account yet. They can do it with /link."
+    return None, "Tell me who to look up, or link your own Steam account first with /link."
+
+
 def not_found(name: str) -> str:
     return f"No stats found for **{name}**. They may not have been tracked yet."
 
@@ -162,9 +177,16 @@ def local_stats_embed(s: dict) -> discord.Embed:
 
 
 @client.tree.command(name="stats", description="Show a player's overall Zero Hour stats")
-@app_commands.describe(player="Player name (or part of it), Steam ID, or Steam profile link")
-async def stats(interaction: discord.Interaction, player: str):
+@app_commands.describe(
+    player="Player name (or part of it), Steam ID, or Steam profile link. Leave empty to use your linked account",
+    user="Or pick a Discord user who has linked their Steam account",
+)
+async def stats(interaction: discord.Interaction, player: Optional[str] = None, user: Optional[discord.User] = None):
     await interaction.response.defer(ephemeral=private(interaction))
+    player, problem = await resolve_target(interaction, player, user)
+    if problem:
+        await respond(interaction, problem)
+        return
 
     # Names the bot has tracked (full or partial). A Steam ID or profile link skips this search.
     matches = [] if steam_stats.is_direct(player) else await asyncio.to_thread(find_players, player)
@@ -199,6 +221,39 @@ async def stats(interaction: discord.Interaction, player: str):
             await respond(interaction, str(err) or not_found(player))
         return
     await respond(interaction, embed=steam_stats_embed(st, summary, local["name"] if local else player))
+
+
+@client.tree.command(name="link", description="Link your Discord account to your Steam account")
+@app_commands.describe(player="Your Steam ID, Steam profile link, or Steam name (names work for the top 200 only)")
+async def link_command(interaction: discord.Interaction, player: str):
+    await interaction.response.defer(ephemeral=private(interaction))
+    try:
+        steam_id = await asyncio.to_thread(find_steam_id, player)
+    except SteamStatsError as err:
+        await respond(interaction, str(err) or "I couldn't find that Steam account. Try your Steam ID or profile link.")
+        return
+    summary = await asyncio.to_thread(get_summary, steam_id)
+    await asyncio.to_thread(set_link, interaction.user.id, steam_id)
+    name = summary.get("name") or steam_id
+    url = summary.get("url") or f"https://steamcommunity.com/profiles/{steam_id}"
+    e = discord.Embed(
+        title=f"Linked to {name}",
+        url=url,
+        description="Now /stats and /rank with no name will show this account, and other people can "
+                    "pick you with the user option. Use /unlink to remove the link.",
+        color=COLOR,
+    )
+    if summary.get("avatar"):
+        e.set_thumbnail(url=summary["avatar"])
+    e.set_footer(text=f"Steam ID {steam_id}")
+    await respond(interaction, embed=e)
+
+
+@client.tree.command(name="unlink", description="Remove the link between your Discord and Steam accounts")
+async def unlink(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=private(interaction))
+    removed = await asyncio.to_thread(remove_link, interaction.user.id)
+    await respond(interaction, "Your Steam account has been unlinked." if removed else "You didn't have a Steam account linked.")
 
 
 @client.tree.command(name="mapstats", description="Show a player's stats by map")
@@ -255,9 +310,16 @@ async def leaderboard_cmd(
 
 
 @client.tree.command(name="rank", description="Check a player's Steam rank and total matchpoints")
-@app_commands.describe(player="Steam ID or profile link (any player), or a Steam name (top 200 only)")
-async def rank(interaction: discord.Interaction, player: str):
+@app_commands.describe(
+    player="Steam ID or profile link (any player), or a Steam name (top 200 only). Leave empty for your linked account",
+    user="Or pick a Discord user who has linked their Steam account",
+)
+async def rank(interaction: discord.Interaction, player: Optional[str] = None, user: Optional[discord.User] = None):
     await interaction.response.defer(ephemeral=private(interaction))
+    player, problem = await resolve_target(interaction, player, user)
+    if problem:
+        await respond(interaction, problem)
+        return
     q = player.strip()
     steam_id = None
     top_entry = None  # the top-200 page entry, which carries a name and picture

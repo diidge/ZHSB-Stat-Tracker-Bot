@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS match_players (
     won         INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (match_id, player_id)
 );
+CREATE TABLE IF NOT EXISTS discord_links (
+    discord_id  TEXT PRIMARY KEY,       -- the Discord user's ID
+    steam_id    TEXT NOT NULL,          -- their 17-digit Steam ID
+    linked_at   REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_mp_player ON match_players(player_id);
 CREATE INDEX IF NOT EXISTS idx_players_name ON players(name COLLATE NOCASE);
 """
@@ -59,6 +64,33 @@ def db():
 def init_db():
     with db() as c:
         c.executescript(SCHEMA)
+
+
+# --------------------------------------------------------------------------
+# Discord <-> Steam links (used by /link and /unlink)
+# --------------------------------------------------------------------------
+def set_link(discord_id, steam_id: str) -> None:
+    """Links a Discord user to a Steam ID (replaces any earlier link for that user)."""
+    with db() as c:
+        c.execute(
+            "INSERT INTO discord_links (discord_id, steam_id, linked_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(discord_id) DO UPDATE SET steam_id = excluded.steam_id, linked_at = excluded.linked_at",
+            (str(discord_id), str(steam_id), time.time()),
+        )
+
+
+def get_link(discord_id) -> Optional[str]:
+    """The Steam ID linked to this Discord user, or None."""
+    with db() as c:
+        row = c.execute("SELECT steam_id FROM discord_links WHERE discord_id = ?", (str(discord_id),)).fetchone()
+    return row["steam_id"] if row else None
+
+
+def remove_link(discord_id) -> bool:
+    """Removes the link. Returns True if there was one."""
+    with db() as c:
+        return c.execute("DELETE FROM discord_links WHERE discord_id = ?", (str(discord_id),)).rowcount > 0
+
 
 
 # --------------------------------------------------------------------------
