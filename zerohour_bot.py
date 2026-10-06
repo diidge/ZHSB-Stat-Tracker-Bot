@@ -27,6 +27,7 @@ import steam_stats
 from steam_leaderboard import BOARD_ID, get_current_players, get_leaderboard, get_top, lookup_rank, search as search_steam
 from steam_stats import PlayerNotFound, SteamStatsError, find_steam_id, get_summary, get_user_stats, is_direct, leaderboard_entry
 from zerohour_db import find_players, get_link, leaderboard, player_stats, remove_link, set_link
+from zhsb_ingest import start_ingest_server
 from zhsb_feed import dig, get_map_images, get_zhsb
 
 COLOR = 0x2B8CFF
@@ -94,6 +95,7 @@ class StatsBot(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()  # registers the slash commands with Discord
+        await start_ingest_server()  # small upload endpoint for the readers/recorder (off unless ZH_INGEST_KEY is set)
 
 
 client = StatsBot()

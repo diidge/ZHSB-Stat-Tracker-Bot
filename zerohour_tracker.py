@@ -12,9 +12,11 @@ The Photon/packet side is intentionally NOT in this file. Your existing client
 decodes the game's traffic; you only need to hand finished matches to
 `on_match_finished()` (in-process) or POST them to /api/ingest (separate process).
 """
+import hmac
+import os
 from typing import List, Optional, Union
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -73,8 +75,22 @@ app = FastAPI(title="Zero Hour Stat Tracker")
 init_db()
 
 
+# Volunteers' readers (and any other client) must send this key in an X-Api-Key header.
+# Set it on the machine that runs this file, e.g.  set ZH_INGEST_KEY=some-long-random-text
+INGEST_KEY = os.environ.get("ZH_INGEST_KEY", "")
+
+
 @app.post("/api/ingest")
-def ingest(match: MatchResult):
+def ingest(match: MatchResult, x_api_key: str = Header(default="")):
+    if not INGEST_KEY:
+        raise HTTPException(503, "Uploads are switched off: set ZH_INGEST_KEY on the server first.")
+    if not hmac.compare_digest(x_api_key.encode(), INGEST_KEY.encode()):
+        raise HTTPException(401, "Wrong or missing upload key.")
+    if not match.players or len(match.players) > 64:
+        raise HTTPException(422, "A match needs between 1 and 64 players.")
+    for p in match.players:
+        if not (-100 <= p.kills <= 500 and 0 <= p.deaths <= 500 and 0 <= p.assists <= 500 and 0 <= p.matchpoints <= 100000):
+            raise HTTPException(422, "Those numbers don't look like a real match.")
     return {"stored": save_match(match)}
 
 
