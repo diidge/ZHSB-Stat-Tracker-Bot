@@ -27,7 +27,13 @@ import steam_stats
 from steam_leaderboard import BOARD_ID, get_current_players, get_leaderboard, get_top, lookup_rank, search as search_steam
 from steam_stats import PlayerNotFound, SteamStatsError, find_steam_id, get_summary, get_user_stats, is_direct, leaderboard_entry
 from zerohour_db import find_players, get_link, leaderboard, player_stats, remove_link, set_link
-from zhsb_ingest import start_ingest_server
+try:
+    import zhsb_ingest
+    INGEST_IMPORT_ERROR = ""
+except Exception as err:   # a problem with the upload feature must never stop the whole bot
+    zhsb_ingest = None
+    INGEST_IMPORT_ERROR = f"{type(err).__name__}: {err}"
+    print("[ingest] Could not load the upload feature:", INGEST_IMPORT_ERROR)
 from zhsb_feed import dig, get_map_images, get_zhsb
 
 COLOR = 0x2B8CFF
@@ -45,6 +51,7 @@ EPHEMERAL = {
     "showservers": True,
     "link": True,
     "unlink": True,
+    "ingest": True,
 }
 
 
@@ -95,7 +102,12 @@ class StatsBot(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()  # registers the slash commands with Discord
-        await start_ingest_server()  # small upload endpoint for the readers/recorder (off unless ZH_INGEST_KEY is set)
+        if zhsb_ingest is not None:   # small upload endpoint for the readers/recorder (off unless ZH_INGEST_KEY is set)
+            try:
+                await zhsb_ingest.start_ingest_server()
+            except Exception as err:
+                zhsb_ingest.STATUS["message"] = f"OFF: failed to start ({type(err).__name__}: {err})"
+                print("[ingest] Failed to start:", err)
 
 
 client = StatsBot()
@@ -256,6 +268,35 @@ async def unlink(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=private(interaction))
     removed = await asyncio.to_thread(remove_link, interaction.user.id)
     await respond(interaction, "Your Steam account has been unlinked." if removed else "You didn't have a Steam account linked.")
+
+
+@client.tree.command(name="ingest", description="(Admins) Check whether the stats upload endpoint is working")
+@app_commands.default_permissions(administrator=True)
+async def ingest_status(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=private(interaction))
+    perms = getattr(interaction.user, "guild_permissions", None)
+    if not perms or not perms.administrator:
+        await respond(interaction, "Only server administrators can use this command.")
+        return
+    if zhsb_ingest is None:
+        await respond(interaction, f"The upload feature could not be loaded, so it is OFF.\n`{INGEST_IMPORT_ERROR}`\n"
+                                   "Usually this means a file is missing from the bot's folder (zhsb_ingest.py or zhsb_parse.py).")
+        return
+    st = zhsb_ingest.STATUS
+    ports = ", ".join(f"{k}={os.environ[k]}" for k in ("INGEST_PORT", "SERVER_PORT", "PORT") if os.environ.get(k)) or "none set"
+    key = "set" if os.environ.get("ZH_INGEST_KEY", "").strip() else "NOT set"
+    archived = 0
+    base = os.path.join(zhsb_ingest.ARCHIVE_DIR, "accepted")
+    for _root, _dirs, files in os.walk(base):
+        archived += sum(1 for f in files if f.endswith(".json"))
+    last = f"<t:{int(st['last_at'])}:R>" if st["last_at"] else "none yet"
+    await respond(interaction,
+        f"**Upload endpoint**\n"
+        f"Status: {st['message']}\n"
+        f"Upload key variable: {key}\n"
+        f"Port variables seen: {ports}\n"
+        f"Since the bot started: {st['received']} received, {st['stored']} new, {st['rejected']} rejected | last upload {last}\n"
+        f"Archived files on disk: {archived}")
 
 
 @client.tree.command(name="mapstats", description="Show a player's stats by map")
